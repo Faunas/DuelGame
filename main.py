@@ -23,7 +23,7 @@ def get_possible_words(letters, word_list):
     possible_words = []
 
     for word in word_list:
-        if 5 <= len(word) <= 8:  # Filter words based on length
+        if 4 <= len(word) <= 8:
             word_count = {}
             for char in word:
                 word_count[char] = word_count.get(char, 0) + 1
@@ -35,21 +35,18 @@ def get_possible_words(letters, word_list):
 
 
 def is_russian_letter(letter):
-    return 'А' <= letter <= 'Я' or 'а' <= letter <= 'я'
+    return 'А' <= letter <= 'Я' or 'а' <= 'я'
 
 
-def find_letter_positions(image, letters, rect_top_left, rect_bottom_right):
+def find_letter_positions(image, rect_top_left, rect_bottom_right):
     letter_positions = {}
 
-    # Capture the entire screen to determine offset
     full_screenshot = pyautogui.screenshot()
     full_screenshot_np = np.array(full_screenshot)
 
-    # Calculate offset between cropped screenshot and full screen
     offset_x = rect_top_left[0]
     offset_y = rect_top_left[1]
 
-    # Use pytesseract to find character bounding boxes
     boxes = pytesseract.image_to_boxes(image, lang='rus')
 
     for box in boxes.splitlines():
@@ -57,43 +54,73 @@ def find_letter_positions(image, letters, rect_top_left, rect_bottom_right):
         letter = b[0]
         x_crop, y_crop = int(b[1]), int(b[2])
 
-        # Convert cropped coordinates to full screen coordinates
         x_full = x_crop + offset_x
-        y_full = image.shape[0] - int(b[4]) + offset_y  # Correct y-coordinate conversion
+        y_full = image.shape[0] - int(b[4]) + offset_y
 
-        # Debugging: print bounding box details
-        print(f"Letter: {letter}, Position (full screen): ({x_full}, {y_full})")
-
-        # Check if the letter is a Russian letter
         if is_russian_letter(letter):
             if letter.upper() not in letter_positions:
                 letter_positions[letter.upper()] = []
             letter_positions[letter.upper()].append((x_full, y_full))
-        else:
-            print(f"Ignoring non-Russian letter: '{letter}'")
-
-    # Debugging: print letter_positions after processing
-    print("Letter positions:", letter_positions)
 
     return letter_positions
 
 
+def preprocess_image(image, lower_bound, upper_bound):
+    mask = cv2.inRange(image, lower_bound, upper_bound)
+    res = cv2.bitwise_and(image, image, mask=mask)
+
+    gray = cv2.cvtColor(res, cv2.COLOR_BGR2GRAY)
+    gray = cv2.medianBlur(gray, 5)
+    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+
+    kernel = np.ones((2, 2), np.uint8)
+    thresh = cv2.erode(thresh, kernel, iterations=1)
+    thresh = cv2.dilate(thresh, kernel, iterations=1)
+
+    return thresh
+
+
+def detect_colored_letters(image):
+    hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    red_lower = np.array([0, 70, 50])
+    red_upper = np.array([10, 255, 255])
+    gray_lower = np.array([0, 0, 50])
+    gray_upper = np.array([180, 50, 255])
+    blue_lower = np.array([100, 150, 0])
+    blue_upper = np.array([140, 255, 255])
+
+    red_letters = preprocess_image(hsv_image, red_lower, red_upper)
+    gray_letters = preprocess_image(hsv_image, gray_lower, gray_upper)
+    blue_letters = preprocess_image(hsv_image, blue_lower, blue_upper)
+
+    return red_letters, gray_letters, blue_letters
+
+
+def filter_letters(scanned_text_red, scanned_text_gray, scanned_text_blue):
+    letters_red = scanned_text_red.lower()
+    letters_gray = scanned_text_gray.lower()
+    letters_blue = scanned_text_blue.lower()
+
+    if 'е' in letters_gray and 'ж' in letters_gray:
+        letters_gray = letters_gray.replace('ж', '')
+    if 'ч' in letters_gray and 'р' in letters_gray:
+        letters_gray = letters_gray.replace('ч', '')
+
+    return letters_red, letters_gray, letters_blue
+
+
 def click_letters(letter_positions, word):
-    print("я тут")
     used_positions = set()
     for letter in word:
-        print(f"Обрабатываю букву: '{str(letter)}' в слове {word}")
-        if letter.upper() in letter_positions:  # Сравниваем с оригинальными заглавными буквами
-            print("я тут2")
+        if letter.upper() in letter_positions:
             for position in letter_positions[letter.upper()]:
                 if position not in used_positions:
-                    # Perform a click at the position (adjust the duration and tween here as needed)
                     pyautogui.click(position[0], position[1])
                     used_positions.add(position)
-                    time.sleep(0.5)
+                    time.sleep(0.2)
                     break
     pyautogui.click(1145, 956)
-# Если буква уже была нажата, то нельзя использовать ее второй раз
 
 
 def main():
@@ -101,56 +128,59 @@ def main():
         try:
             if pyautogui.locateOnScreen("hod_my.png"):
                 time.sleep(2.0)
-                n = 5000  # Number of words to output
+                n = 5000
 
-                # Load Russian words from the JSON file
                 json_file = 'words-russian-nouns.json'
                 russian_words = load_russian_words_from_json(json_file)
 
-                # Очистка всех букв, ожидание одной секунды.
                 try:
                     pyautogui.click("clear_words.png")
                     time.sleep(0.5)
-                except:
+                except Exception:
                     pass
 
-                # Capture a screenshot
                 screenshot = pyautogui.screenshot()
 
-                # Coordinates of the rectangular area
                 rect_top_left = (720, 509)
                 rect_bottom_right = (1200, 888)
 
-                # Crop the screenshot to the specified rectangular area
                 screenshot_roi = screenshot.crop(
                     (rect_top_left[0], rect_top_left[1], rect_bottom_right[0], rect_bottom_right[1])
                 )
                 screenshot_roi_np = np.array(screenshot_roi)
 
-                # Convert the image to grayscale
                 gray_image = cv2.cvtColor(screenshot_roi_np, cv2.COLOR_BGR2GRAY)
-
-                # Apply binary thresholding
                 _, bw_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-                # Save the black-and-white image
                 bw_image_path = 'bw_image.png'
                 cv2.imwrite(bw_image_path, bw_image)
 
-                # Convert the black-and-white image to text using Tesseract OCR
-                scanned_text = pytesseract.image_to_string(bw_image, config='--psm 6 --oem 3 -l rus')
-                scanned_text = scanned_text.replace('\n', '').replace(' ', '')
+                red_letters, gray_letters, blue_letters = detect_colored_letters(screenshot_roi_np)
 
-                # Output the detected text
-                print("Detected text: ", scanned_text.lower())
+                config = '--psm 6 --oem 3 -l rus'
+                scanned_text_red = pytesseract.image_to_string(red_letters, config=config)
+                scanned_text_gray = pytesseract.image_to_string(gray_letters, config=config)
+                scanned_text_blue = pytesseract.image_to_string(blue_letters, config=config)
 
-                # Extract letters
-                letters = scanned_text.lower()
+                scanned_text_red = scanned_text_red.replace('\n', '').replace(' ', '')
+                scanned_text_gray = scanned_text_gray.replace('\n', '').replace(' ', '')
+                scanned_text_blue = scanned_text_blue.replace('\n', '').replace(' ', '')
 
-                # Find possible words from the loaded Russian words list
-                possible_words = get_possible_words(letters, russian_words)
+                letters_red, letters_gray, letters_blue = filter_letters(scanned_text_red, scanned_text_gray, scanned_text_blue)
 
-                # Filter to limit to n words with no more than 5 words starting with the same letter
+                print(f"Буквы на красном фоне: {letters_red}")
+                print(f"Буквы на сером фоне: {letters_gray}")
+                print(f"Буквы на синем фоне: {letters_blue}")
+
+                possible_words_red = get_possible_words(letters_red, russian_words)
+                possible_words_gray = get_possible_words(letters_gray, russian_words)
+                possible_words_blue = get_possible_words(letters_blue, russian_words)
+
+                possible_words = list(set(possible_words_gray + possible_words_red) - set(possible_words_blue))
+
+                if len(letters_gray) == 1:
+                    letters_combined = letters_gray + letters_red + letters_blue
+                    possible_words = get_possible_words(letters_combined, russian_words)
+
                 filtered_words = []
                 letter_count = {}
 
@@ -162,24 +192,22 @@ def main():
                         if len(filtered_words) == n:
                             break
 
-                # Output the filtered words
-                for word in filtered_words:
-                    print(word)
+                # if filtered_words:
+                #     print("Используются буквы на сером + красном фоне:")
+                #     for word in filtered_words:
+                #         print(word)
+                # else:
+                #     print("Используются буквы на других фонах (например, синем + красном):")
 
-                # Find positions of each letter in the detected text
-                letter_positions = find_letter_positions(bw_image, letters, rect_top_left, rect_bottom_right)
-                print(len(letter_positions))
-                print("-----------")
-                # # Click on each letter of the word "обелиск" in order
-                word_to_click = str(random.choice(possible_words)).upper()
+                letter_positions = find_letter_positions(bw_image, rect_top_left, rect_bottom_right)
 
+                if filtered_words:
+                    word_to_click = str(random.choice(filtered_words)).upper()
+                    click_letters(letter_positions, word_to_click)
+                else:
+                    print("Нет доступных слов для клика.")
 
-
-                click_letters(letter_positions, word_to_click)
-
-                # Display the saved black-and-white image
                 saved_image = Image.open(bw_image_path)
-                # saved_image.show()
         except Exception:
             try:
                 dalee_btn = pyautogui.locateOnScreen("dalee.png")
@@ -190,7 +218,6 @@ def main():
                     pyautogui.click(close_ad)
                 except Exception:
                     try:
-                        # print("Пытаюсь найти \"ИГРАТЬ\"")
                         play_btn = pyautogui.locateOnScreen("play.png")
                         pyautogui.click(play_btn)
                     except Exception:
